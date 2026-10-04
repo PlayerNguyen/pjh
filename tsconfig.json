@@ -6,6 +6,6 @@
       "@pjh/app/*": ["./apps/*/src/index.ts"]
     }
   },
-  "include": ["apps/**/*", "packages/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["apps/core/**/*", "packages/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist", "apps/dashboard"]
 }

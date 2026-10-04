@@ -1,0 +1,26 @@
+{
+  "name": "@pjh/process-engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "bun test",
+    "test:coverage": "bun ../../scripts/check-coverage.ts --cwd . --min 60"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./delegations": "./src/delegations.ts",
+    "./executor": "./src/executor.ts",
+    "./scheduler": "./src/scheduler.ts",
+    "./loader": "./src/loader.ts"
+  },
+  "dependencies": {
+    "@pjh/task": "workspace:*",
+    "kysely": "^0.28.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "kysely-bun-worker": "^1.2.1"
+  }
+}

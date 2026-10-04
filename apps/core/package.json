@@ -1,0 +1,23 @@
+{
+  "name": "@pjh/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "test:coverage": "bun ../../scripts/check-coverage.ts --cwd . --min 60"
+  },
+  "dependencies": {
+    "@pjh/core": "workspace:*",
+    "@pjh/process-engine": "workspace:*",
+    "@pjh/stats": "workspace:*",
+    "@pjh/task": "workspace:*",
+    "hono": "^4.6.0",
+    "kysely": "^0.28.0",
+    "kysely-bun-worker": "^1.2.1",
+    "zod": "^4.0.0"
+  }
+}

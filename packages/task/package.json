@@ -1,0 +1,18 @@
+{
+  "name": "@pjh/task",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "bun test",
+    "test:coverage": "bun ../../scripts/check-coverage.ts --cwd . --min 60"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "kysely": "^0.28.0",
+    "zod": "^4.0.0"
+  }
+}
