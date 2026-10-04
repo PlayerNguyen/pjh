@@ -3,9 +3,10 @@ import type { PageLoad } from "./$types";
 
 export const load: PageLoad = async ({ params, fetch }) => {
   const api = createApi(fetch);
-  const [task, instances] = await Promise.all([
-    api.task(params.id),
-    api.instances({ taskId: params.id, limit: 20 }),
+  const task = await api.task(params.id);
+  const [strategy, instances] = await Promise.all([
+    api.strategy(task.type),
+    api.instances({ delegationId: params.id, limit: 20 }),
   ]);
-  return { task, instances };
+  return { task, strategy, instances };
 };

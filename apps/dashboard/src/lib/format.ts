@@ -1,27 +1,45 @@
 import type { TaskInstanceStatus } from "@pjh/task";
+import type { Locale } from "./i18n/locales.ts";
 
-export function formatDate(value: string | null | undefined): string {
+export function formatDate(
+  value: string | null | undefined,
+  locale: Locale = "en",
+): string {
   if (!value) return "—";
-  const d = new Date(value);
-  return d.toLocaleString();
+  return new Date(value).toLocaleString(locale === "vi" ? "vi-VN" : "en-US");
 }
 
-export function formatRelative(value: string | null | undefined): string {
+export function formatRelative(
+  value: string | null | undefined,
+  locale: Locale = "en",
+): string {
   if (!value) return "—";
   const diff = Date.now() - new Date(value).getTime();
   const abs = Math.abs(diff);
-  const suffix = diff >= 0 ? "ago" : "from now";
-  const units: [number, string][] = [
-    [1000, "s"],
-    [60_000, "m"],
-    [3_600_000, "h"],
-    [86_400_000, "d"],
+  const isPast = diff >= 0;
+
+  const rtf = new Intl.RelativeTimeFormat(locale === "vi" ? "vi" : "en", {
+    numeric: "auto",
+  });
+
+  const units: [number, Intl.RelativeTimeFormatUnit][] = [
+    [1000, "second"],
+    [60_000, "minute"],
+    [3_600_000, "hour"],
+    [86_400_000, "day"],
   ];
-  let label = `${Math.round(abs / 1000)}s`;
-  for (const [ms, unit] of units) {
-    if (abs >= ms) label = `${Math.round(abs / ms)}${unit}`;
+
+  let unit: Intl.RelativeTimeFormatUnit = "second";
+  let divisor = 1000;
+  for (const [ms, u] of units) {
+    if (abs >= ms) {
+      divisor = ms;
+      unit = u;
+    }
   }
-  return `${label} ${suffix}`;
+
+  const amount = Math.round(abs / divisor);
+  return rtf.format(isPast ? -amount : amount, unit);
 }
 
 export function formatDuration(ms: number | null | undefined): string {

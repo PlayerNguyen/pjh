@@ -3,6 +3,7 @@ import { Badge } from "$lib/components/ui/badge";
 import * as Card from "$lib/components/ui/card";
 import * as Table from "$lib/components/ui/table";
 import { formatDuration, formatRelative, statusVariant } from "$lib/format";
+import { i18n } from "$lib/i18n";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
@@ -12,15 +13,15 @@ const filters = ["", "running", "succeeded", "failed", "timeout", "cancelled"];
 
 <div class="flex flex-col gap-6">
 	<div>
-		<h1 class="text-2xl font-semibold tracking-tight">Instances</h1>
-		<p class="text-sm text-muted-foreground">Every task execution, newest first.</p>
+		<h1 class="text-2xl font-semibold tracking-tight">{i18n.t("instances.title")}</h1>
+		<p class="text-sm text-muted-foreground">{i18n.t("instances.subtitle")}</p>
 	</div>
 
 	<div class="flex flex-wrap gap-2">
 		{#each filters as f (f)}
 			<a href={f ? `?status=${f}` : "/instances"}>
 				<Badge variant={data.status === f ? "default" : "outline"}>
-					{f || "all"}
+					{f ? i18n.t(`status.${f}`) : i18n.t("common.all")}
 				</Badge>
 			</a>
 		{/each}
@@ -31,12 +32,12 @@ const filters = ["", "running", "succeeded", "failed", "timeout", "cancelled"];
 			<Table.Root>
 				<Table.Header>
 					<Table.Row>
-						<Table.Head>Instance</Table.Head>
-						<Table.Head>Task</Table.Head>
-						<Table.Head>Status</Table.Head>
-						<Table.Head>Trigger</Table.Head>
-						<Table.Head>Duration</Table.Head>
-						<Table.Head>Queued</Table.Head>
+						<Table.Head>{i18n.t("instances.columnInstance")}</Table.Head>
+						<Table.Head>{i18n.t("instances.columnTask")}</Table.Head>
+						<Table.Head>{i18n.t("instances.columnStatus")}</Table.Head>
+						<Table.Head>{i18n.t("instances.columnTrigger")}</Table.Head>
+						<Table.Head>{i18n.t("instances.columnDuration")}</Table.Head>
+						<Table.Head>{i18n.t("instances.columnQueued")}</Table.Head>
 					</Table.Row>
 				</Table.Header>
 				<Table.Body>
@@ -48,24 +49,26 @@ const filters = ["", "running", "succeeded", "failed", "timeout", "cancelled"];
 								</a>
 							</Table.Cell>
 							<Table.Cell>
-								<a href={`/tasks/${inst.taskId}`} class="text-sm hover:underline">
-									{inst.taskId}
+								<a href={`/tasks/${inst.delegationId}`} class="text-sm hover:underline">
+									{inst.delegationId}
 								</a>
 							</Table.Cell>
 							<Table.Cell>
-								<Badge variant={statusVariant[inst.status]}>{inst.status}</Badge>
+								<Badge variant={statusVariant[inst.status]}>
+									{i18n.t(`status.${inst.status}`)}
+								</Badge>
 							</Table.Cell>
-							<Table.Cell class="text-xs">{inst.trigger}</Table.Cell>
+							<Table.Cell class="text-xs">{i18n.t(`trigger.${inst.trigger}`)}</Table.Cell>
 							<Table.Cell class="text-xs">{formatDuration(inst.durationMs)}</Table.Cell>
 							<Table.Cell class="text-xs text-muted-foreground">
-								{formatRelative(inst.queuedAt)}
+								{formatRelative(inst.queuedAt, i18n.locale)}
 							</Table.Cell>
 						</Table.Row>
 					{/each}
 					{#if data.instances.length === 0}
 						<Table.Row>
 							<Table.Cell colspan={6} class="h-24 text-center text-muted-foreground">
-								No instances found.
+								{i18n.t("instances.empty")}
 							</Table.Cell>
 						</Table.Row>
 					{/if}
