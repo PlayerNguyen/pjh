@@ -42,14 +42,14 @@ class I18nState {
     return interpolate(translated, params);
   };
 
-	setLocale = (locale: Locale): void => {
-		this.locale = locale;
-		if (typeof document !== "undefined") {
-			// biome-ignore lint/suspicious/noDocumentCookie: simple locale preference cookie
-			document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000; samesite=lax`;
-			document.documentElement.lang = locale;
-		}
-	};
+  setLocale = (locale: Locale): void => {
+    this.locale = locale;
+    if (typeof document !== "undefined") {
+      // biome-ignore lint/suspicious/noDocumentCookie: simple locale preference cookie
+      document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000; samesite=lax`;
+      document.documentElement.lang = locale;
+    }
+  };
 }
 
 export const i18n = new I18nState();

@@ -146,12 +146,30 @@ No authentication — this is the primary architectural flow.
 bun run dev          # core + dashboard
 bun run dev:core
 bun run dev:dashboard
+bun run build        # production dashboard bundle (adapter-node)
+bun run start:core
+bun run start:dashboard
 bun run test         # core tests (bun test)
+bun run test:memory  # build + boot production stack, assert peak RSS < 200 MB
 bun run check        # tsc + svelte-check
 bun run typecheck
 bun run lint         # Biome
 bun run lint:fix
 ```
+
+## Memory budget
+
+CI asserts that the production processes stay under **200 MB** peak resident
+memory (RSS):
+
+```bash
+bun run test:memory --limit-mb 200 --duration-ms 6000
+```
+
+The `scripts/check-memory.ts` harness builds the dashboard with adapter-node,
+boots the core and dashboard, samples each process's RSS via `ps`, and fails if
+either exceeds the limit. `scripts/assert-memory.ts` is the single-process
+primitive for asserting an arbitrary command.
 
 ## License
 
