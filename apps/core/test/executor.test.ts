@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Executor } from "@pjh/process-engine";
 import type { PjhDB } from "@pjh/task";
 import { argsHash, defineTask, TaskRegistry } from "@pjh/task";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import { Executor } from "../src/engine/executor.ts";
 import { freshDb } from "./helpers.ts";
 
 let db: Kysely<PjhDB>;
@@ -44,7 +44,7 @@ async function insertDelegation(
 }
 
 describe("executor", () => {
-  test("records a successful instance with validated args", async () => {
+  test("should record a successful instance with validated args", async () => {
     db = await freshDb();
     const def = defineTask({
       type: "ok",
@@ -79,7 +79,7 @@ describe("executor", () => {
     expect(logs).toHaveLength(1);
   });
 
-  test("fails when args are invalid for the strategy", async () => {
+  test("should fail when args are invalid for the strategy", async () => {
     db = await freshDb();
     const def = defineTask({
       type: "strict",
@@ -107,7 +107,7 @@ describe("executor", () => {
     expect(instance.error).toContain("Invalid delegation args");
   });
 
-  test("records a failed instance", async () => {
+  test("should record a failed instance", async () => {
     db = await freshDb();
     const def = defineTask({
       type: "boom",
@@ -137,7 +137,7 @@ describe("executor", () => {
     expect(instance.error).toBe("kaboom");
   });
 
-  test("skips when a run is in progress (skip policy)", async () => {
+  test("should skip when a run is in progress under the skip policy", async () => {
     db = await freshDb();
     const def = defineTask({
       type: "slow",
@@ -164,7 +164,7 @@ describe("executor", () => {
     await Bun.sleep(80);
   });
 
-  test("unknown delegation is rejected", async () => {
+  test("should reject an unknown delegation", async () => {
     db = await freshDb();
     const registry = new TaskRegistry();
     const executor = new Executor({ db, getStrategy: (t) => registry.get(t) });
@@ -173,7 +173,7 @@ describe("executor", () => {
     expect(res.reason).toBe("unknown-delegation");
   });
 
-  test("timed out run is marked as timeout", async () => {
+  test("should mark a timed out run as timeout", async () => {
     db = await freshDb();
     const def = defineTask({
       type: "timeout",

@@ -6,40 +6,39 @@ import {
 } from "@pjh/task";
 import type { Kysely } from "kysely";
 import type { Scheduler } from "./scheduler.ts";
+import type {
+  CreateDelegationInput,
+  ServiceError,
+  UpdateDelegationInput,
+} from "./types.ts";
 
-export interface CreateDelegationInput {
-  type: string;
-  name: string;
-  args?: unknown;
-  schedule?: string;
-  timezone?: string | null;
-  enabled?: boolean;
-  timeoutMs?: number | null;
-  concurrency?: TaskConcurrency;
-}
-
-export interface UpdateDelegationInput {
-  name?: string;
-  args?: unknown;
-  schedule?: string;
-  timezone?: string | null;
-  enabled?: boolean;
-  timeoutMs?: number | null;
-  concurrency?: TaskConcurrency;
-}
-
-export type ServiceError =
-  | { code: "unknown-strategy"; message: string }
-  | { code: "invalid-args"; message: string; issues: unknown }
-  | { code: "invalid-schedule"; message: string }
-  | { code: "duplicate-args"; message: string; existingId: string }
-  | { code: "not-found"; message: string };
-
+/**
+ * Domain service owning the lifecycle of task delegations: create, update,
+ * remove, plus duplicate detection. It validates arguments against the
+ * code-defined strategy and keeps the scheduler in sync.
+ *
+ * @example
+ * ```ts
+ * const service = new DelegationService(db, (type) => registry.get(type), scheduler);
+ *
+ * const created = await service.create({
+ *   type: "heartbeat",
+ *   name: "Heartbeat",
+ *   args: { message: "tick" },
+ * });
+ * if (created.ok) console.log(created.id);
+ * ```
+ */
 export class DelegationService {
   readonly #db: Kysely<PjhDB>;
   readonly #getStrategy: (type: string) => TaskDefinition | undefined;
   readonly #scheduler: Scheduler;
 
+  /**
+   * @param db - Query builder over the shared SQLite database.
+   * @param getStrategy - Resolves a strategy definition by its type.
+   * @param scheduler - Scheduler kept in sync as delegations change.
+   */
   constructor(
     db: Kysely<PjhDB>,
     getStrategy: (type: string) => TaskDefinition | undefined,
@@ -50,7 +49,15 @@ export class DelegationService {
     this.#scheduler = scheduler;
   }
 
-  /** Returns the id of another delegation of the same type+args, if any. */
+  /**
+   * Returns the id of another delegation of the same type + args, if any.
+   *
+   * @example
+   * ```ts
+   * const dup = await service.findDuplicate("heartbeat", { message: "tick" });
+   * // => "seed-heartbeat" | undefined
+   * ```
+   */
   async findDuplicate(
     type: string,
     args: unknown,
@@ -67,6 +74,16 @@ export class DelegationService {
     return row?.id;
   }
 
+  /**
+   * Validates and persists a new delegation, then schedules it.
+   *
+   * @example
+   * ```ts
+   * const result = await service.create({ type: "heartbeat", name: "Heartbeat" });
+   * // => { ok: true, id: "..." }
+   * // or { ok: false, error: { code: "duplicate-args", ... } }
+   * ```
+   */
   async create(
     input: CreateDelegationInput,
   ): Promise<{ ok: true; id: string } | { ok: false; error: ServiceError }> {
@@ -156,6 +173,15 @@ export class DelegationService {
     return { ok: true, id };
   }
 
+  /**
+   * Applies a partial update and re-validates args/schedule, then reschedules.
+   *
+   * @example
+   * ```ts
+   * const result = await service.update(id, { enabled: false });
+   * // => { ok: true }
+   * ```
+   */
   async update(
     id: string,
     input: UpdateDelegationInput,
@@ -248,6 +274,16 @@ export class DelegationService {
     return { ok: true };
   }
 
+  /**
+   * Deletes a delegation and unschedules it.
+   *
+   * @returns `true` when a row was removed.
+   * @example
+   * ```ts
+   * await service.remove(id); // => true
+   * await service.remove(id); // => false
+   * ```
+   */
   async remove(id: string): Promise<boolean> {
     const res = await this.#db
       .deleteFrom("task_delegation")
@@ -257,6 +293,19 @@ export class DelegationService {
     return Number(res.numDeletedRows ?? 0n) > 0;
   }
 
+  /**
+   * Re-reads a delegation and re-registers its cron job with the scheduler.
+   *
+   * @example
+   * ```ts
+   * await service.reschedule(id);
+   * ```
+   */
+  async reschedule(id: string): Promise<void> {
+    await this.#reschedule(id);
+  }
+
+  /** Persist a delegation row and hand it to the scheduler. */
   async #reschedule(id: string): Promise<void> {
     const row = await this.#db
       .selectFrom("task_delegation")

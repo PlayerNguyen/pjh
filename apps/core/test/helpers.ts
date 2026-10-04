@@ -22,7 +22,7 @@ describe("migrations", () => {
     db = await freshDb();
   });
 
-  test("creates all tables", async () => {
+  test("should create all tables", async () => {
     const tables = await db.introspection.getTables();
     const names = tables.map((t) => t.name).sort();
     expect(names).toEqual([

@@ -1,24 +1,20 @@
 import type { PjhDB, TaskConcurrency, TaskDefinition } from "@pjh/task";
 import { argsHash, argsToJsonSchema } from "@pjh/task";
 import type { Kysely } from "kysely";
-import type { z } from "zod";
-
-export interface SeedDelegation {
-  /** Deterministic id so re-running the seed is idempotent. */
-  id: string;
-  type: string;
-  name: string;
-  args?: unknown;
-  schedule?: string;
-  timezone?: string | null;
-  enabled?: boolean;
-  timeoutMs?: number | null;
-  concurrency?: TaskConcurrency;
-}
+import type { SeedDelegation } from "./types.ts";
 
 /**
  * Mirrors code-defined strategies into `task_strategy`. Descriptive fields and
  * the params schema are owned by code and refreshed on every boot.
+ *
+ * @example
+ * ```ts
+ * const result = await syncStrategies(db, [heartbeatDef]);
+ * // => { created: ["heartbeat"], updated: [] }
+ *
+ * const again = await syncStrategies(db, [heartbeatDef]);
+ * // => { created: [], updated: ["heartbeat"] }
+ * ```
  */
 export async function syncStrategies(
   db: Kysely<PjhDB>,
@@ -77,6 +73,16 @@ export async function syncStrategies(
   return { created, updated };
 }
 
+/**
+ * Deletes strategies whose type is not present in code anymore. Delegations
+ * cascade-delete because of the foreign key.
+ *
+ * @example
+ * ```ts
+ * await pruneStrategies(db, ["heartbeat"]);
+ * // => 1  (the removed "cleanup-instances" strategy)
+ * ```
+ */
 export async function pruneStrategies(
   db: Kysely<PjhDB>,
   knownTypes: string[],
@@ -93,11 +99,21 @@ export async function pruneStrategies(
  * Migration-style seeding of delegations. Only inserts a delegation when its
  * deterministic id does not already exist, so user edits are never clobbered
  * and re-running the seed is a no-op.
+ *
+ * @example
+ * ```ts
+ * const inserted = await seedDelegations(
+ *   db,
+ *   [{ id: "seed-heartbeat", type: "heartbeat", name: "Heartbeat", args: {} }],
+ *   (type) => registry.get(type)?.args,
+ * );
+ * // => ["seed-heartbeat"] on first run, [] afterwards
+ * ```
  */
 export async function seedDelegations(
   db: Kysely<PjhDB>,
   seeds: SeedDelegation[],
-  resolveSchema?: (type: string) => z.ZodType | undefined,
+  resolveSchema?: (type: string) => import("zod").ZodType | undefined,
 ): Promise<string[]> {
   const inserted: string[] = [];
   const now = new Date().toISOString();

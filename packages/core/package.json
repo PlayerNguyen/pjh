@@ -1,5 +1,5 @@
 {
-  "name": "@pjh/task",
+  "name": "@pjh/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,10 +9,11 @@
     "test:coverage": "bun ../../scripts/check-coverage.ts --cwd . --min 60"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./serialize": "./src/serialize.ts"
   },
   "dependencies": {
-    "kysely": "^0.28.0",
-    "zod": "^4.0.0"
+    "@pjh/task": "workspace:*",
+    "kysely": "^0.28.0"
   }
 }

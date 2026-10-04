@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+  DelegationService,
+  Executor,
+  Scheduler,
+  syncStrategies,
+} from "@pjh/process-engine";
 import type { PjhDB } from "@pjh/task";
 import { defineTask, TaskRegistry } from "@pjh/task";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import { createApi } from "../src/api/routes.ts";
-import { DelegationService } from "../src/engine/delegations.ts";
-import { Executor } from "../src/engine/executor.ts";
-import { syncStrategies } from "../src/engine/loader.ts";
-import { Scheduler } from "../src/engine/scheduler.ts";
 import { freshDb } from "./helpers.ts";
 
 let db: Kysely<PjhDB>;
@@ -48,14 +50,14 @@ async function createTask(
 }
 
 describe("api", () => {
-  test("GET /api/health", async () => {
+  test("should return ok from GET /api/health", async () => {
     const app = await setup();
     const res = await app.request("/api/health");
     expect(res.status).toBe(200);
     expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
   });
 
-  test("GET /api/strategies exposes params schema", async () => {
+  test("should expose params schema from GET /api/strategies", async () => {
     const app = await setup();
     const res = await app.request("/api/strategies");
     const body = (await res.json()) as Array<{
@@ -67,7 +69,7 @@ describe("api", () => {
     expect(body[0]!.paramsSchema.properties).toHaveProperty("target");
   });
 
-  test("creating a delegation validates args", async () => {
+  test("should validate args when creating a delegation", async () => {
     const app = await setup();
     const bad = await createTask(app, {
       type: "job",
@@ -77,7 +79,7 @@ describe("api", () => {
     expect(bad.status).toBe(400);
   });
 
-  test("rejects duplicate type+args regardless of name", async () => {
+  test("should reject duplicate type+args regardless of name", async () => {
     const app = await setup();
     const first = await createTask(app, {
       type: "job",
@@ -97,7 +99,7 @@ describe("api", () => {
     expect(err.existingId).toBeTruthy();
   });
 
-  test("allows same type with different args", async () => {
+  test("should allow the same type with different args", async () => {
     const app = await setup();
     await createTask(app, { type: "job", name: "A", args: { target: "a" } });
     const other = await createTask(app, {
@@ -108,13 +110,13 @@ describe("api", () => {
     expect(other.status).toBe(201);
   });
 
-  test("rejects unknown strategy type", async () => {
+  test("should reject an unknown strategy type", async () => {
     const app = await setup();
     const res = await createTask(app, { type: "nope", name: "N" });
     expect(res.status).toBe(400);
   });
 
-  test("PATCH updates and re-validates args", async () => {
+  test("should update and re-validate args on PATCH", async () => {
     const app = await setup();
     const created = await createTask(app, {
       type: "job",
@@ -132,7 +134,7 @@ describe("api", () => {
     expect(((await res.json()) as { enabled: boolean }).enabled).toBe(false);
   });
 
-  test("DELETE removes a delegation", async () => {
+  test("should remove a delegation on DELETE", async () => {
     const app = await setup();
     const created = await createTask(app, {
       type: "job",
@@ -146,7 +148,7 @@ describe("api", () => {
     expect(rows).toHaveLength(0);
   });
 
-  test("POST run creates an instance and stats summarize", async () => {
+  test("should create an instance on run and summarize stats", async () => {
     const app = await setup();
     const created = await createTask(app, {
       type: "job",

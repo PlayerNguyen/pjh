@@ -41,6 +41,9 @@ jobs:
       - name: Unit tests
         run: bun run test
 
+      - name: Test coverage (>= 60%)
+        run: bun run test:coverage
+
       - name: Build production bundle
         run: bun run build
 

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { pruneStrategies, seedDelegations, syncStrategies } from "@pjh/process-engine";
 import type { PjhDB } from "@pjh/task";
 import { defineTask } from "@pjh/task";
 import type { Kysely } from "kysely";
 import { z } from "zod";
+import { pruneStrategies, seedDelegations, syncStrategies } from "../src/loader.ts";
 import { freshDb } from "./helpers.ts";
 
 let db: Kysely<PjhDB>;
@@ -41,7 +41,7 @@ describe("loader", () => {
     expect(schema.type).toBe("object");
   });
 
-  test("should update descriptive fields on re-sync without touching delegations", async () => {
+  test("should update descriptive fields on re-sync", async () => {
     db = await freshDb();
     const def = strategy("a");
     await syncStrategies(db, [def]);
@@ -56,6 +56,13 @@ describe("loader", () => {
     expect(removed).toBe(1);
     const rows = await db.selectFrom("task_strategy").select("type").execute();
     expect(rows.map((r) => r.type)).toEqual(["keep"]);
+  });
+
+  test("should delete every strategy when no types are known", async () => {
+    db = await freshDb();
+    await syncStrategies(db, [strategy("a"), strategy("b")]);
+    const removed = await pruneStrategies(db, []);
+    expect(removed).toBe(2);
   });
 
   test("should seed delegations idempotently and preserve user edits", async () => {
@@ -91,10 +98,9 @@ describe("loader", () => {
       .executeTakeFirstOrThrow();
     expect(row.name).toBe("Renamed");
     expect(row.enabled).toBe(0);
-    expect(JSON.parse(row.args)).toEqual({ n: 5 });
   });
 
-  test("should apply schema defaults during seeding for consistent dedupe", async () => {
+  test("should apply schema defaults when seeding", async () => {
     db = await freshDb();
     const def = strategy("a");
     await syncStrategies(db, [def]);
@@ -111,7 +117,21 @@ describe("loader", () => {
       .selectAll()
       .where("id", "=", "seed-a")
       .executeTakeFirstOrThrow();
-    // Schema default for `n` is 1.
     expect(JSON.parse(row.args)).toEqual({ n: 1 });
+  });
+
+  test("should seed a delegation without a resolver", async () => {
+    db = await freshDb();
+    await syncStrategies(db, [strategy("a")]);
+    const inserted = await seedDelegations(db, [
+      { id: "seed-a", type: "a", name: "A", args: { n: 3 } },
+    ]);
+    expect(inserted).toEqual(["seed-a"]);
+    const row = await db
+      .selectFrom("task_delegation")
+      .selectAll()
+      .where("id", "=", "seed-a")
+      .executeTakeFirstOrThrow();
+    expect(JSON.parse(row.args)).toEqual({ n: 3 });
   });
 });

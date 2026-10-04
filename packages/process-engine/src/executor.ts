@@ -1,41 +1,23 @@
-import type {
-  PjhDB,
-  TaskConcurrency,
-  TaskDefinition,
-  TaskInstanceStatus,
-  TaskInstanceTrigger,
-} from "@pjh/task";
+import type { PjhDB, TaskConcurrency, TaskInstanceStatus } from "@pjh/task";
 import type { Kysely } from "kysely";
+import type {
+  DelegationRow,
+  ExecutorDeps,
+  RunningEntry,
+  TriggerOptions,
+  TriggerResult,
+} from "./types.ts";
 
-export interface ExecutorDeps {
-  db: Kysely<PjhDB>;
-  /** Resolve a strategy by its type from the code registry. */
-  getStrategy: (type: string) => TaskDefinition | undefined;
-  /** Called after an instance settles so the scheduler can refresh next_run_at. */
-  onSettled?: (delegationId: string) => Promise<void> | void;
-}
-
-export interface TriggerOptions {
-  trigger: TaskInstanceTrigger;
-  payload?: unknown;
-}
-
-export interface TriggerResult {
-  started: boolean;
-  instanceId?: string;
-  reason?:
-    | "disabled"
-    | "unknown-delegation"
-    | "unknown-strategy"
-    | "skipped-running"
-    | "queued";
-}
-
-interface RunningEntry {
-  controller: AbortController;
-  promise: Promise<void>;
-}
-
+/**
+ * Serializes a handler return value for storage on the instance row.
+ *
+ * @example
+ * ```ts
+ * serializeResult({ ok: true }); // => '{"ok":true}'
+ * serializeResult("hello");      // => "hello"
+ * serializeResult(null);         // => null
+ * ```
+ */
 function serializeResult(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value === "string") return value;
@@ -47,9 +29,33 @@ function serializeResult(value: unknown): string | null {
 }
 
 /**
+ * Parses a delegation's stored args, falling back to `{}` when malformed.
+ *
+ * @example
+ * ```ts
+ * parseArgs('{"a":1}'); // => { a: 1 }
+ * parseArgs("not json"); // => {}
+ * ```
+ */
+function parseArgs(args: string): unknown {
+  try {
+    return JSON.parse(args);
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Runs task handlers and records the lifecycle of every attempt as a
  * `task_instance` row. A delegation resolves to a code-defined strategy by
  * `type`, and its stored `args` are passed to the handler.
+ *
+ * @example
+ * ```ts
+ * const executor = new Executor({ db, getStrategy: (t) => registry.get(t) });
+ * const result = await executor.trigger(id, { trigger: "manual" });
+ * // => { started: true, instanceId: "..." }
+ * ```
  */
 export class Executor {
   readonly #db: Kysely<PjhDB>;
@@ -59,16 +65,36 @@ export class Executor {
   readonly #queue = new Map<string, TriggerOptions[]>();
   readonly #instances = new Map<string, AbortController>();
 
+  /**
+   * @param deps - Database, strategy resolver and optional settle callback.
+   */
   constructor(deps: ExecutorDeps) {
     this.#db = deps.db;
     this.#getStrategy = deps.getStrategy;
     this.#onSettled = deps.onSettled;
   }
 
+  /**
+   * Whether a delegation currently has an in-flight run.
+   *
+   * @example
+   * ```ts
+   * executor.isRunning(id); // => false
+   * ```
+   */
   isRunning(delegationId: string): boolean {
     return this.#running.has(delegationId);
   }
 
+  /**
+   * Starts an instance for a delegation, honoring its concurrency policy.
+   *
+   * @example
+   * ```ts
+   * const res = await executor.trigger(id, { trigger: "schedule" });
+   * // => { started: false, reason: "skipped-running" }
+   * ```
+   */
   async trigger(delegationId: string, opts: TriggerOptions): Promise<TriggerResult> {
     const delegation = await this.#db
       .selectFrom("task_delegation")
@@ -103,6 +129,15 @@ export class Executor {
     return { started: true, instanceId };
   }
 
+  /**
+   * Aborts a running instance by id.
+   *
+   * @returns `true` when a matching running instance was aborted.
+   * @example
+   * ```ts
+   * executor.cancel(instanceId); // => true
+   * ```
+   */
   cancel(instanceId: string): boolean {
     const controller = this.#instances.get(instanceId);
     if (!controller) return false;
@@ -110,6 +145,7 @@ export class Executor {
     return true;
   }
 
+  /** Creates the instance row, wires timeout/abort handling and runs it. */
   async #start(
     delegation: DelegationRow,
     instanceId: string,
@@ -194,6 +230,7 @@ export class Executor {
     this.#running.set(delegation.id, { controller, promise });
   }
 
+  /** Validates stored args and races the handler against abort. */
   async #run(
     delegation: DelegationRow,
     instanceId: string,
@@ -266,6 +303,7 @@ export class Executor {
     return await handler;
   }
 
+  /** Writes the terminal status, timing, result and error of an instance. */
   async #settle(
     instanceId: string,
     status: TaskInstanceStatus,
@@ -287,6 +325,7 @@ export class Executor {
       .execute();
   }
 
+  /** Starts the next queued run for a delegation, if any. */
   async #drain(delegation: DelegationRow): Promise<void> {
     const queued = this.#queue.get(delegation.id);
     if (!queued || queued.length === 0) return;
@@ -296,23 +335,5 @@ export class Executor {
       const instanceId = crypto.randomUUID();
       await this.#start(delegation, instanceId, next);
     }
-  }
-}
-
-interface DelegationRow {
-  id: string;
-  type: string;
-  name: string;
-  args: string;
-  enabled: number;
-  concurrency: TaskConcurrency;
-  timeout_ms: number | null;
-}
-
-function parseArgs(args: string): unknown {
-  try {
-    return JSON.parse(args);
-  } catch {
-    return {};
   }
 }

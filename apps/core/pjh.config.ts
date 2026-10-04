@@ -1,4 +1,4 @@
-import type { SeedDelegation } from "./src/engine/loader.ts";
+import type { SeedDelegation } from "@pjh/process-engine";
 
 export interface PjhConfig {
   /** Extra task strategy modules to load at boot (local paths or packages). */
