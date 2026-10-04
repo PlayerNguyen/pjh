@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { PjhDB } from "@pjh/task";
 import { defineTask, TaskRegistry } from "@pjh/task";
 import type { Kysely } from "kysely";
+import { z } from "zod";
 import { createApi } from "../src/api/routes.ts";
+import { DelegationService } from "../src/engine/delegations.ts";
 import { Executor } from "../src/engine/executor.ts";
-import { syncTasks } from "../src/engine/loader.ts";
+import { syncStrategies } from "../src/engine/loader.ts";
 import { Scheduler } from "../src/engine/scheduler.ts";
 import { freshDb } from "./helpers.ts";
 
@@ -17,19 +19,32 @@ afterEach(async () => {
 async function setup() {
   db = await freshDb();
   const def = defineTask({
-    id: "job",
+    type: "job",
     name: "Job",
     description: "test job",
-    schedule: "@hourly",
+    args: z.object({ target: z.string() }),
+    defaultSchedule: "@hourly",
     handle: () => ({ ok: true }),
   });
   const registry = new TaskRegistry().register(def);
-  await syncTasks(db, registry.list());
+  await syncStrategies(db, registry.list());
 
-  const executor = new Executor({ db, getTask: (id) => registry.get(id) });
+  const executor = new Executor({ db, getStrategy: (t) => registry.get(t) });
   const scheduler = new Scheduler(db, async () => {});
-  const app = createApi({ db, executor, scheduler });
+  const delegations = new DelegationService(db, (t) => registry.get(t), scheduler);
+  const app = createApi({ db, executor, delegations });
   return app;
+}
+
+async function createTask(
+  app: ReturnType<typeof createApi>,
+  body: Record<string, unknown>,
+) {
+  return app.request("/api/tasks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 describe("api", () => {
@@ -40,55 +55,117 @@ describe("api", () => {
     expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
   });
 
-  test("GET /api/tasks returns synced task", async () => {
+  test("GET /api/strategies exposes params schema", async () => {
     const app = await setup();
-    const res = await app.request("/api/tasks");
-    const body = (await res.json()) as Array<{ id: string; enabled: boolean }>;
+    const res = await app.request("/api/strategies");
+    const body = (await res.json()) as Array<{
+      type: string;
+      paramsSchema: { properties?: Record<string, unknown> };
+    }>;
     expect(body).toHaveLength(1);
-    expect(body[0]!.id).toBe("job");
-    expect(body[0]!.enabled).toBe(true);
+    expect(body[0]!.type).toBe("job");
+    expect(body[0]!.paramsSchema.properties).toHaveProperty("target");
   });
 
-  test("PATCH rejects invalid cron", async () => {
+  test("creating a delegation validates args", async () => {
     const app = await setup();
-    const res = await app.request("/api/tasks/job", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ schedule: "not a cron" }),
+    const bad = await createTask(app, {
+      type: "job",
+      name: "Bad",
+      args: { target: 123 },
     });
+    expect(bad.status).toBe(400);
+  });
+
+  test("rejects duplicate type+args regardless of name", async () => {
+    const app = await setup();
+    const first = await createTask(app, {
+      type: "job",
+      name: "First",
+      args: { target: "a" },
+    });
+    expect(first.status).toBe(201);
+
+    const second = await createTask(app, {
+      type: "job",
+      name: "Second (different name)",
+      args: { target: "a" },
+    });
+    expect(second.status).toBe(409);
+    const err = (await second.json()) as { code: string; existingId: string };
+    expect(err.code).toBe("duplicate-args");
+    expect(err.existingId).toBeTruthy();
+  });
+
+  test("allows same type with different args", async () => {
+    const app = await setup();
+    await createTask(app, { type: "job", name: "A", args: { target: "a" } });
+    const other = await createTask(app, {
+      type: "job",
+      name: "B",
+      args: { target: "b" },
+    });
+    expect(other.status).toBe(201);
+  });
+
+  test("rejects unknown strategy type", async () => {
+    const app = await setup();
+    const res = await createTask(app, { type: "nope", name: "N" });
     expect(res.status).toBe(400);
   });
 
-  test("PATCH disables a task", async () => {
+  test("PATCH updates and re-validates args", async () => {
     const app = await setup();
-    const res = await app.request("/api/tasks/job", {
+    const created = await createTask(app, {
+      type: "job",
+      name: "A",
+      args: { target: "a" },
+    });
+    const { id } = (await created.json()) as { id: string };
+
+    const res = await app.request(`/api/tasks/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled: false }),
     });
-    const body = (await res.json()) as { enabled: boolean };
     expect(res.status).toBe(200);
-    expect(body.enabled).toBe(false);
+    expect(((await res.json()) as { enabled: boolean }).enabled).toBe(false);
   });
 
-  test("POST run creates an instance", async () => {
+  test("DELETE removes a delegation", async () => {
     const app = await setup();
-    const res = await app.request("/api/tasks/job/run", { method: "POST" });
-    expect(res.status).toBe(202);
-    const { instanceId } = (await res.json()) as { instanceId: string };
+    const created = await createTask(app, {
+      type: "job",
+      name: "A",
+      args: { target: "z" },
+    });
+    const { id } = (await created.json()) as { id: string };
+    const res = await app.request(`/api/tasks/${id}`, { method: "DELETE" });
+    expect(res.status).toBe(204);
+    const rows = await db.selectFrom("task_delegation").select("id").execute();
+    expect(rows).toHaveLength(0);
+  });
+
+  test("POST run creates an instance and stats summarize", async () => {
+    const app = await setup();
+    const created = await createTask(app, {
+      type: "job",
+      name: "R",
+      args: { target: "run" },
+    });
+    const { id } = (await created.json()) as { id: string };
+
+    const run = await app.request(`/api/tasks/${id}/run`, { method: "POST" });
+    expect(run.status).toBe(202);
+    const { instanceId } = (await run.json()) as { instanceId: string };
     await Bun.sleep(30);
 
     const detail = await app.request(`/api/instances/${instanceId}`);
-    const body = (await detail.json()) as { status: string; logs: unknown[] };
-    expect(body.status).toBe("succeeded");
-    expect(Array.isArray(body.logs)).toBe(true);
-  });
+    expect(((await detail.json()) as { status: string }).status).toBe("succeeded");
 
-  test("GET /api/stats summarizes", async () => {
-    const app = await setup();
-    const res = await app.request("/api/stats");
-    const body = (await res.json()) as { total: number; enabled: number };
+    const statRes = await app.request("/api/stats");
+    const body = (await statRes.json()) as { total: number; strategies: number };
     expect(body.total).toBe(1);
-    expect(body.enabled).toBe(1);
+    expect(body.strategies).toBe(1);
   });
 });

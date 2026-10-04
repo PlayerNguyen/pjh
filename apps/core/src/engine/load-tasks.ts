@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { type TaskDefinition, TaskRegistry } from "@pjh/task";
 import config from "../../pjh.config.ts";
+import type { SeedDelegation } from "./loader.ts";
 
 function normalize(mod: unknown): TaskDefinition[] {
   const value = (mod as { default?: unknown }).default ?? mod;
@@ -9,8 +10,8 @@ function normalize(mod: unknown): TaskDefinition[] {
 }
 
 /**
- * Loads built-in tasks discovered under `src/tasks/**` plus any modules listed
- * in `pjh.config.ts`, and registers them in a fresh registry.
+ * Loads built-in task strategies discovered under `src/tasks/**` plus any
+ * modules listed in `pjh.config.ts`, and registers them in a fresh registry.
  */
 export async function loadTasks(): Promise<TaskRegistry> {
   const registry = new TaskRegistry();
@@ -33,6 +34,6 @@ export async function loadTasks(): Promise<TaskRegistry> {
   return registry;
 }
 
-export function defaultEnabled(): boolean {
-  return config.defaultEnabled ?? true;
+export function seedDelegations(): SeedDelegation[] {
+  return config.delegations ?? [];
 }

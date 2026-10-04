@@ -1,14 +1,18 @@
 import { defineTask } from "@pjh/task";
+import { z } from "zod";
 
 export default defineTask({
-  id: "heartbeat",
+  type: "heartbeat",
   name: "Heartbeat",
-  description: "Logs a heartbeat line every minute to verify the scheduler.",
-  schedule: "* * * * *",
-  timeoutMs: 10_000,
-  concurrency: "skip",
+  description: "Logs a heartbeat line on a schedule to verify the scheduler.",
+  args: z.object({
+    message: z.string().default("heartbeat tick").describe("Log message"),
+  }),
+  defaultSchedule: "* * * * *",
+  defaultTimeoutMs: 10_000,
+  defaultConcurrency: "skip",
   async handle(ctx) {
-    ctx.log("info", "heartbeat tick", { at: new Date().toISOString() });
+    ctx.log("info", ctx.args.message, { at: new Date().toISOString() });
     return { ok: true };
   },
 });

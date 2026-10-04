@@ -1,17 +1,10 @@
-import type { TaskDefinition } from "@pjh/task";
+import type { SeedDelegation } from "./src/engine/loader.ts";
 
-/**
- * Task plugin configuration for the core app.
- *
- * Built-in tasks discovered under `src/tasks/**` are always loaded. Add
- * additional task packages here as module specifiers — either local paths or
- * installed packages that default-export a `TaskDefinition` (or an array).
- */
 export interface PjhConfig {
-  /** Extra task modules to load at boot. */
+  /** Extra task strategy modules to load at boot (local paths or packages). */
   tasks?: string[];
-  /** Default enabled state for newly discovered tasks. */
-  defaultEnabled?: boolean;
+  /** Delegations seeded on boot. Only inserted when their id is absent. */
+  delegations?: SeedDelegation[];
 }
 
 const config: PjhConfig = {
@@ -19,9 +12,21 @@ const config: PjhConfig = {
     // "./src/tasks/heartbeat.task.ts",
     // "@acme/pjh-tasks/backup",
   ],
-  defaultEnabled: true,
+  delegations: [
+    {
+      id: "seed-heartbeat",
+      type: "heartbeat",
+      name: "Heartbeat",
+      schedule: "* * * * *",
+    },
+    {
+      id: "seed-cleanup-instances",
+      type: "cleanup-instances",
+      name: "Cleanup old instances",
+      args: { retentionDays: 7 },
+      schedule: "0 3 * * *",
+    },
+  ],
 };
 
 export default config;
-
-export type TaskModule = TaskDefinition | TaskDefinition[];

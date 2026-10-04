@@ -4,14 +4,43 @@ import { type Kysely, sql } from "kysely";
 /**
  * Idempotent schema setup. Kept as plain SQL so it can run on every boot
  * without a migration bookkeeping table for this first iteration.
+ *
+ * Model:
+ * - `task_strategy`   — code-defined task types (logic + params schema)
+ * - `task_delegation` — configured, schedulable instances (seeded or user-created)
+ * - `task_instance`   — one row per execution of a delegation
+ * - `task_instance_log`
  */
 export async function migrate(db: Kysely<PjhDB>): Promise<void> {
   await db.schema
-    .createTable("task")
+    .createTable("task_strategy")
     .ifNotExists()
-    .addColumn("id", "text", (c) => c.primaryKey())
+    .addColumn("type", "text", (c) => c.primaryKey())
     .addColumn("name", "text", (c) => c.notNull())
     .addColumn("description", "text")
+    .addColumn("params_schema", "text", (c) => c.notNull())
+    .addColumn("default_schedule", "text")
+    .addColumn("default_timezone", "text")
+    .addColumn("default_timeout_ms", "integer")
+    .addColumn("default_concurrency", "text")
+    .addColumn("created_at", "text", (c) =>
+      c.notNull().defaultTo(sql`(current_timestamp)`),
+    )
+    .addColumn("updated_at", "text", (c) =>
+      c.notNull().defaultTo(sql`(current_timestamp)`),
+    )
+    .execute();
+
+  await db.schema
+    .createTable("task_delegation")
+    .ifNotExists()
+    .addColumn("id", "text", (c) => c.primaryKey())
+    .addColumn("type", "text", (c) =>
+      c.notNull().references("task_strategy.type").onDelete("cascade"),
+    )
+    .addColumn("name", "text", (c) => c.notNull())
+    .addColumn("args", "text", (c) => c.notNull().defaultTo("{}"))
+    .addColumn("args_hash", "text", (c) => c.notNull())
     .addColumn("schedule", "text", (c) => c.notNull())
     .addColumn("timezone", "text")
     .addColumn("enabled", "integer", (c) => c.notNull().defaultTo(1))
@@ -28,11 +57,25 @@ export async function migrate(db: Kysely<PjhDB>): Promise<void> {
     .execute();
 
   await db.schema
+    .createIndex("idx_delegation_hash")
+    .ifNotExists()
+    .on("task_delegation")
+    .columns(["args_hash"])
+    .execute();
+
+  await db.schema
+    .createIndex("idx_delegation_type")
+    .ifNotExists()
+    .on("task_delegation")
+    .columns(["type"])
+    .execute();
+
+  await db.schema
     .createTable("task_instance")
     .ifNotExists()
     .addColumn("id", "text", (c) => c.primaryKey())
-    .addColumn("task_id", "text", (c) =>
-      c.notNull().references("task.id").onDelete("cascade"),
+    .addColumn("delegation_id", "text", (c) =>
+      c.notNull().references("task_delegation.id").onDelete("cascade"),
     )
     .addColumn("status", "text", (c) => c.notNull())
     .addColumn("trigger", "text", (c) => c.notNull())
@@ -57,11 +100,14 @@ export async function migrate(db: Kysely<PjhDB>): Promise<void> {
     .addColumn("data", "text")
     .execute();
 
+  // Drop legacy tables from the previous (code-auto-synced) model if present.
+  await db.schema.dropTable("task").ifExists().execute();
+
   await db.schema
-    .createIndex("idx_instance_task")
+    .createIndex("idx_instance_delegation")
     .ifNotExists()
     .on("task_instance")
-    .columns(["task_id"])
+    .columns(["delegation_id"])
     .execute();
 
   await db.schema

@@ -1,10 +1,10 @@
-import type { PjhDB, TaskDefinition } from "@pjh/task";
-import { type Kysely, sql } from "kysely";
+import type { PjhDB } from "@pjh/task";
+import type { Kysely } from "kysely";
 
 type CronJob = Bun.CronJob;
 
 export type TriggerFn = (
-  taskId: string,
+  delegationId: string,
   trigger: "schedule" | "manual" | "retry",
 ) => Promise<void>;
 
@@ -13,7 +13,8 @@ export interface SchedulerOptions {
 }
 
 /**
- * Owns one in-process cron job per enabled task using Bun's native scheduler.
+ * Owns one in-process cron job per enabled delegation using Bun's native
+ * scheduler.
  *
  * `Bun.cron` already guarantees runs never overlap for a given schedule; the
  * executor adds a second guard so manual triggers respect the same policy.
@@ -48,43 +49,48 @@ export class Scheduler {
     this.nextRun(schedule, timezone);
   }
 
-  /** Register (or re-register) a job from the current DB row. */
-  async schedule(task: TaskDefinition | TaskRowInput): Promise<void> {
-    const job = this.#jobFor(task.id);
-    job?.stop();
+  /** Register (or re-register) a job from the current delegation row. */
+  async schedule(delegation: DelegationInput): Promise<void> {
+    this.#jobFor(delegation.id)?.stop();
 
-    if (!task.enabled) {
-      this.#jobs.delete(task.id);
-      this.#schedules.delete(task.id);
-      await this.#writeNext(task.id, null);
+    if (!delegation.enabled) {
+      this.#jobs.delete(delegation.id);
+      this.#schedules.delete(delegation.id);
+      await this.#writeNext(delegation.id, null);
       return;
     }
 
-    const tz = task.timezone ?? this.#defaultTimezone;
+    const tz = delegation.timezone ?? this.#defaultTimezone;
     const options: { tz: string } | undefined = tz ? { tz } : undefined;
 
     const newJob = Bun.cron(
-      task.schedule,
+      delegation.schedule,
       async () => {
-        await this.#trigger(task.id, "schedule");
-        await this.#writeNext(task.id, this.#safeNext(task.schedule, tz ?? undefined));
+        await this.#trigger(delegation.id, "schedule");
+        await this.#writeNext(
+          delegation.id,
+          this.#safeNext(delegation.schedule, tz ?? undefined),
+        );
       },
       options,
     );
 
-    this.#jobs.set(task.id, newJob);
-    this.#schedules.set(task.id, task.schedule);
-    await this.#writeNext(task.id, this.nextRun(task.schedule, tz ?? undefined));
+    this.#jobs.set(delegation.id, newJob);
+    this.#schedules.set(delegation.id, delegation.schedule);
+    await this.#writeNext(
+      delegation.id,
+      this.nextRun(delegation.schedule, tz ?? undefined),
+    );
   }
 
-  unschedule(taskId: string): void {
-    this.#jobFor(taskId)?.stop();
-    this.#jobs.delete(taskId);
-    this.#schedules.delete(taskId);
+  unschedule(delegationId: string): void {
+    this.#jobFor(delegationId)?.stop();
+    this.#jobs.delete(delegationId);
+    this.#schedules.delete(delegationId);
   }
 
-  nextFire(taskId: string): Date | null {
-    const schedule = this.#schedules.get(taskId);
+  nextFire(delegationId: string): Date | null {
+    const schedule = this.#schedules.get(delegationId);
     if (!schedule) return null;
     return this.#safeNext(schedule, undefined);
   }
@@ -95,8 +101,8 @@ export class Scheduler {
     this.#schedules.clear();
   }
 
-  #jobFor(taskId: string): CronJob | undefined {
-    return this.#jobs.get(taskId);
+  #jobFor(delegationId: string): CronJob | undefined {
+    return this.#jobs.get(delegationId);
   }
 
   #safeNext(schedule: string, timezone?: string): Date | null {
@@ -107,27 +113,29 @@ export class Scheduler {
     }
   }
 
-  async #writeNext(taskId: string, next: Date | null): Promise<void> {
+  async #writeNext(delegationId: string, next: Date | null): Promise<void> {
     await this.#db
-      .updateTable("task")
+      .updateTable("task_delegation")
       .set({ next_run_at: next ? next.toISOString() : null })
-      .where("id", "=", taskId)
+      .where("id", "=", delegationId)
       .execute();
   }
 }
 
-export interface TaskRowInput {
+export interface DelegationInput {
   id: string;
   schedule: string;
   timezone: string | null;
   enabled: boolean;
 }
 
-export async function loadEnabledTasks(db: Kysely<PjhDB>): Promise<TaskRowInput[]> {
+export async function loadEnabledDelegations(
+  db: Kysely<PjhDB>,
+): Promise<DelegationInput[]> {
   const rows = await db
-    .selectFrom("task")
+    .selectFrom("task_delegation")
     .select(["id", "schedule", "timezone", "enabled"])
-    .where(sql<boolean>`enabled = 1`)
+    .where("enabled", "=", 1)
     .execute();
 
   return rows.map((r) => ({

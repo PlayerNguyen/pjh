@@ -25,6 +25,11 @@ describe("migrations", () => {
   test("creates all tables", async () => {
     const tables = await db.introspection.getTables();
     const names = tables.map((t) => t.name).sort();
-    expect(names).toEqual(["task", "task_instance", "task_instance_log"]);
+    expect(names).toEqual([
+      "task_delegation",
+      "task_instance",
+      "task_instance_log",
+      "task_strategy",
+    ]);
   });
 });

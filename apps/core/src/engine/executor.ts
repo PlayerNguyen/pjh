@@ -9,9 +9,10 @@ import type { Kysely } from "kysely";
 
 export interface ExecutorDeps {
   db: Kysely<PjhDB>;
-  getTask: (id: string) => TaskDefinition | undefined;
+  /** Resolve a strategy by its type from the code registry. */
+  getStrategy: (type: string) => TaskDefinition | undefined;
   /** Called after an instance settles so the scheduler can refresh next_run_at. */
-  onSettled?: (taskId: string) => Promise<void> | void;
+  onSettled?: (delegationId: string) => Promise<void> | void;
 }
 
 export interface TriggerOptions {
@@ -22,7 +23,12 @@ export interface TriggerOptions {
 export interface TriggerResult {
   started: boolean;
   instanceId?: string;
-  reason?: "disabled" | "unknown-task" | "skipped-running" | "queued";
+  reason?:
+    | "disabled"
+    | "unknown-delegation"
+    | "unknown-strategy"
+    | "skipped-running"
+    | "queued";
 }
 
 interface RunningEntry {
@@ -42,11 +48,12 @@ function serializeResult(value: unknown): string | null {
 
 /**
  * Runs task handlers and records the lifecycle of every attempt as a
- * `task_instance` row.
+ * `task_instance` row. A delegation resolves to a code-defined strategy by
+ * `type`, and its stored `args` are passed to the handler.
  */
 export class Executor {
   readonly #db: Kysely<PjhDB>;
-  readonly #getTask: ExecutorDeps["getTask"];
+  readonly #getStrategy: ExecutorDeps["getStrategy"];
   readonly #onSettled: ExecutorDeps["onSettled"] | undefined;
   readonly #running = new Map<string, RunningEntry>();
   readonly #queue = new Map<string, TriggerOptions[]>();
@@ -54,45 +61,45 @@ export class Executor {
 
   constructor(deps: ExecutorDeps) {
     this.#db = deps.db;
-    this.#getTask = deps.getTask;
+    this.#getStrategy = deps.getStrategy;
     this.#onSettled = deps.onSettled;
   }
 
-  isRunning(taskId: string): boolean {
-    return this.#running.has(taskId);
+  isRunning(delegationId: string): boolean {
+    return this.#running.has(delegationId);
   }
 
-  async trigger(taskId: string, opts: TriggerOptions): Promise<TriggerResult> {
-    const def = this.#getTask(taskId);
-    if (!def) return { started: false, reason: "unknown-task" };
-
-    const row = await this.#db
-      .selectFrom("task")
-      .select(["enabled", "concurrency"])
-      .where("id", "=", taskId)
+  async trigger(delegationId: string, opts: TriggerOptions): Promise<TriggerResult> {
+    const delegation = await this.#db
+      .selectFrom("task_delegation")
+      .select(["id", "type", "name", "args", "enabled", "concurrency", "timeout_ms"])
+      .where("id", "=", delegationId)
       .executeTakeFirst();
 
-    if (!row) return { started: false, reason: "unknown-task" };
-    if (row.enabled !== 1 && opts.trigger !== "manual") {
+    if (!delegation) return { started: false, reason: "unknown-delegation" };
+    if (!this.#getStrategy(delegation.type)) {
+      return { started: false, reason: "unknown-strategy" };
+    }
+    if (delegation.enabled !== 1 && opts.trigger !== "manual") {
       return { started: false, reason: "disabled" };
     }
 
-    const policy: TaskConcurrency = row.concurrency ?? "skip";
-    const running = this.#running.has(taskId);
+    const policy: TaskConcurrency = delegation.concurrency ?? "skip";
+    const running = this.#running.has(delegationId);
 
     if (running) {
       if (policy === "skip") return { started: false, reason: "skipped-running" };
       if (policy === "queue") {
-        const queued = this.#queue.get(taskId) ?? [];
+        const queued = this.#queue.get(delegationId) ?? [];
         queued.push(opts);
-        this.#queue.set(taskId, queued);
+        this.#queue.set(delegationId, queued);
         return { started: false, reason: "queued" };
       }
       // "parallel" falls through and starts immediately.
     }
 
     const instanceId = crypto.randomUUID();
-    await this.#start(def, instanceId, opts);
+    await this.#start(delegation, instanceId, opts);
     return { started: true, instanceId };
   }
 
@@ -104,7 +111,7 @@ export class Executor {
   }
 
   async #start(
-    def: TaskDefinition,
+    delegation: DelegationRow,
     instanceId: string,
     opts: TriggerOptions,
   ): Promise<void> {
@@ -116,7 +123,7 @@ export class Executor {
       .insertInto("task_instance")
       .values({
         id: instanceId,
-        task_id: def.id,
+        delegation_id: delegation.id,
         status: "running",
         trigger: opts.trigger,
         queued_at: startedAt.toISOString(),
@@ -129,12 +136,12 @@ export class Executor {
       .execute();
 
     await this.#db
-      .updateTable("task")
+      .updateTable("task_delegation")
       .set({ last_run_at: startedAt.toISOString() })
-      .where("id", "=", def.id)
+      .where("id", "=", delegation.id)
       .execute();
 
-    const timeoutMs = def.timeoutMs ?? 0;
+    const timeoutMs = delegation.timeout_ms ?? 0;
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -145,7 +152,7 @@ export class Executor {
       }, timeoutMs);
     }
 
-    const promise = this.#run(def, instanceId, controller, opts)
+    const promise = this.#run(delegation, instanceId, controller, opts)
       .then(async (result) => {
         if (timer) clearTimeout(timer);
         const finishedAt = new Date();
@@ -179,20 +186,32 @@ export class Executor {
       })
       .finally(async () => {
         this.#instances.delete(instanceId);
-        this.#running.delete(def.id);
-        await this.#onSettled?.(def.id);
-        await this.#drain(def);
+        this.#running.delete(delegation.id);
+        await this.#onSettled?.(delegation.id);
+        await this.#drain(delegation);
       });
 
-    this.#running.set(def.id, { controller, promise });
+    this.#running.set(delegation.id, { controller, promise });
   }
 
   async #run(
-    def: TaskDefinition,
+    delegation: DelegationRow,
     instanceId: string,
     controller: AbortController,
     opts: TriggerOptions,
   ): Promise<unknown> {
+    const strategy = this.#getStrategy(delegation.type);
+    if (!strategy) throw new Error(`Unknown task strategy "${delegation.type}"`);
+
+    const parsed = strategy.args.safeParse(parseArgs(delegation.args));
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid delegation args for "${delegation.type}": ${parsed.error.issues
+          .map((i: { message: string }) => i.message)
+          .join(", ")}`,
+      );
+    }
+
     const log = (
       level: "debug" | "info" | "warn" | "error",
       message: string,
@@ -213,10 +232,13 @@ export class Executor {
     };
 
     const handler = Promise.resolve(
-      def.handle({
+      strategy.handle({
         instanceId,
-        taskId: def.id,
+        delegationId: delegation.id,
+        type: delegation.type,
+        taskName: delegation.name,
         trigger: opts.trigger,
+        args: parsed.data,
         db: this.#db,
         log,
         signal: controller.signal,
@@ -265,14 +287,32 @@ export class Executor {
       .execute();
   }
 
-  async #drain(def: TaskDefinition): Promise<void> {
-    const queued = this.#queue.get(def.id);
+  async #drain(delegation: DelegationRow): Promise<void> {
+    const queued = this.#queue.get(delegation.id);
     if (!queued || queued.length === 0) return;
     const next = queued.shift();
-    if (queued.length === 0) this.#queue.delete(def.id);
+    if (queued.length === 0) this.#queue.delete(delegation.id);
     if (next) {
       const instanceId = crypto.randomUUID();
-      await this.#start(def, instanceId, next);
+      await this.#start(delegation, instanceId, next);
     }
+  }
+}
+
+interface DelegationRow {
+  id: string;
+  type: string;
+  name: string;
+  args: string;
+  enabled: number;
+  concurrency: TaskConcurrency;
+  timeout_ms: number | null;
+}
+
+function parseArgs(args: string): unknown {
+  try {
+    return JSON.parse(args);
+  } catch {
+    return {};
   }
 }
