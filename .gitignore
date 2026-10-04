@@ -4,7 +4,17 @@ node_modules
 # output
 out
 dist
+build
 *.tgz
+
+# sveltekit
+.svelte-kit
+
+# local database + data
+data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 
 # code coverage
 coverage
